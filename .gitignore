@@ -1,0 +1,18 @@
+# Build çýktýlarý
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Loglar
+logs/
+*.log
+
+# Ortam dosyalarý (secret'lar!)
+appsettings.Development.json
+*.env
