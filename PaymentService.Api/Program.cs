@@ -35,6 +35,12 @@ builder.Services.AddHttpClient("BasketService", c =>
     c.Timeout = TimeSpan.FromSeconds(5);
 });
 
+builder.Services.AddHttpClient("ProductService", c =>
+{
+    c.BaseAddress = new Uri(builder.Configuration["ServiceUrls:ProductService"]!);
+    c.Timeout = TimeSpan.FromSeconds(5);
+});
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>

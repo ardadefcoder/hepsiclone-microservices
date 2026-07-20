@@ -74,6 +74,20 @@ namespace UserService.Api.Controllers
             return Ok(new { token, user = ToResponse(user) });
         }
 
+        [HttpGet("users")]
+        public async Task<IActionResult> GetAllUsers()
+        {
+            var users = await _db.Users
+                .Select(u => new UserResponse
+                {
+                    Id = u.Id, Username = u.Username, Email = u.Email, FullName = u.FullName
+                } )
+                .ToListAsync();
+
+            return Ok(users);
+
+        }
+
         // User → UserResponse (PasswordHash'i dışarı sızdırmamak için)
         private static UserResponse ToResponse(User u) => new UserResponse
         {

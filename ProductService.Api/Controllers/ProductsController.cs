@@ -1,8 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Elastic.Clients.Elasticsearch;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProductService.Api.Data;  
+using ProductService.Api.Dtos;
 using ProductService.Api.Models;
-using Elastic.Clients.Elasticsearch;
 
 namespace ProductService.Api.Controllers
 {
@@ -103,5 +104,63 @@ namespace ProductService.Api.Controllers
             _logger.LogInformation("Elasticsearch'te arama yapıldı: {Query}  - {Count}", q, response.Documents.Count);
             return Ok(response.Documents);
         }
+
+        [HttpPost("reduce-stock")]
+        public async Task<IActionResult> ReduceStock(StockReductionRequest request)
+        {
+            // 1) ÖNCE hepsini kontrol et — kısmi düşme olmasın
+            foreach (var item in request.Items)
+            {
+                var p = await _db.Products.FindAsync(item.ProductId);
+                if (p == null)
+                    return NotFound($"Ürün bulunamadı: {item.ProductId}");
+                if (p.Stock < item.Quantity)
+                    return BadRequest($"Yetersiz stok: {p.Name} (mevcut: {p.Stock}, istenen: {item.Quantity})");
+            }
+
+            // 2) Hepsi uygunsa düş
+            foreach (var item in request.Items)
+            {
+                var p = await _db.Products.FindAsync(item.ProductId);
+                p!.Stock -= item.Quantity;
+
+                // ES'i de güncelle — dual-write senkronu
+                var esResponse = await _es.IndexAsync(p, "products", i => i.Id(p.Id));
+                if (!esResponse.IsValidResponse)
+                    _logger.LogWarning("ES stok güncellenemedi: {ProductId}", p.Id);
+
+                _logger.LogInformation("Stok düşürüldü: {ProductId}, {Quantity} adet, kalan {Kalan}",
+                    p.Id, item.Quantity, p.Stock);
+            }
+
+            await _db.SaveChangesAsync();
+            return Ok();
+        }
+
+        [HttpGet("categories")]
+        public async Task<IActionResult> GetAllCategories()
+        {
+            var categories = await _db.Products
+                .Select(p => p.Category)
+                .Distinct()
+                .Where(c => c != "" && c != null)
+                .OrderBy(c => c)
+                .ToListAsync();
+
+            return Ok(categories);
+        }
+
+        [HttpGet("category/{category}")]
+        public async Task<IActionResult> GetByCategory(string category)
+        {
+            var products = await _db.Products
+                .Where(p => p.Category == category)
+                .ToListAsync();
+
+            _logger.LogInformation("Kategori filtrelendi: {Category} - {Count} ürün", category, products.Count);
+
+            return Ok(products);
+        }
+
     }
 }

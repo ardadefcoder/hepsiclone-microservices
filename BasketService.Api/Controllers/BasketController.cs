@@ -1,5 +1,4 @@
-﻿using System.Net.Http.Headers;
-using BasketService.Api.Data;
+﻿using BasketService.Api.Data;
 using BasketService.Api.Dtos;
 using BasketService.Api.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -15,35 +14,37 @@ namespace BasketService.Api.Controllers
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<BasketController> _logger;
 
-        public BasketController(BasketDbContext db,IHttpClientFactory httpClientFactory,ILogger<BasketController> logger)
+        public BasketController(
+            BasketDbContext db,
+            IHttpClientFactory httpClientFactory,
+            ILogger<BasketController> logger)
         {
             _db = db;
             _httpClientFactory = httpClientFactory;
             _logger = logger;
         }
 
-        
+        // ---- Kullanıcının sepetini getir ----
         [HttpGet("{userId}")]
         public async Task<IActionResult> GetBasket(string userId)
         {
             var basket = await _db.Baskets
-                .Include(b => b.Items)                    
+                .Include(b => b.Items)
                 .FirstOrDefaultAsync(b => b.UserId == userId);
 
             if (basket == null)
-                return Ok(new Basket { UserId = userId }); 
+                return Ok(new Basket { UserId = userId });   // sepet yoksa boş sepet dön
 
             return Ok(basket);
         }
 
-   
+        // ---- Sepete ürün ekle ----
         [HttpPost("items")]
         public async Task<IActionResult> AddItem(AddItemRequest request)
         {
-            
+            // 1) ProductService'e sor: ürün var mı, stok/fiyat ne?
             var client = _httpClientFactory.CreateClient("ProductService");
 
-            
             var correlationId = HttpContext.Response.Headers["X-Correlation-Id"].ToString();
             if (!string.IsNullOrEmpty(correlationId))
                 client.DefaultRequestHeaders.Add("X-Correlation-Id", correlationId);
@@ -56,7 +57,7 @@ namespace BasketService.Api.Controllers
                 if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
                     _logger.LogWarning("Sepete eklenmek istenen ürün bulunamadı: {ProductId}", request.ProductId);
-                    return NotFound("Ürün bulunamadı");           // 404: ürün yok (servis çalışıyor)
+                    return NotFound("Ürün bulunamadı");
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -70,20 +71,13 @@ namespace BasketService.Api.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "ProductService'e ulaşılamadı: {ProductId}", request.ProductId);
-                return StatusCode(503, "Ürün servisi şu an yanıt vermiyor");   // gerçek bağlantı hatası
+                return StatusCode(503, "Ürün servisi şu an yanıt vermiyor");
             }
 
             if (product == null)
                 return NotFound("Ürün bulunamadı");
 
-            if (product.Stock < request.Quantity)
-            {
-                _logger.LogWarning("Yetersiz stok: {ProductId} istenen {Q}, mevcut {S}",
-                    request.ProductId, request.Quantity, product.Stock);
-                return BadRequest($"Yeterli stok yok. Mevcut: {product.Stock}");
-            }
-
-            
+            // 2) Sepeti bul ya da oluştur
             var basket = await _db.Baskets
                 .Include(b => b.Items)
                 .FirstOrDefaultAsync(b => b.UserId == request.UserId);
@@ -94,7 +88,19 @@ namespace BasketService.Api.Controllers
                 _db.Baskets.Add(basket);
             }
 
+            // 3) BİRİKİMLİ stok kontrolü: sepetteki + yeni istenen
             var existing = basket.Items.FirstOrDefault(i => i.ProductId == request.ProductId);
+            int sepettekiAdet = existing?.Quantity ?? 0;
+            int toplamIstenen = sepettekiAdet + request.Quantity;
+
+            if (product.Stock < toplamIstenen)
+            {
+                _logger.LogWarning("Yetersiz stok: {ProductId} sepette {Sepetteki}, istenen {Istenen}, stok {Stok}",
+                    request.ProductId, sepettekiAdet, request.Quantity, product.Stock);
+                return BadRequest($"Yeterli stok yok. Stok: {product.Stock}, sepetinizde zaten: {sepettekiAdet}");
+            }
+
+            // 4) Ekle ya da adedi arttır (buraya geldiysek stok yeterli)
             if (existing != null)
             {
                 existing.Quantity += request.Quantity;
@@ -104,21 +110,21 @@ namespace BasketService.Api.Controllers
                 basket.Items.Add(new BasketItem
                 {
                     ProductId = product.Id,
-                    ProductName = product.Name,       
-                    Price = product.Price,
+                    ProductName = product.Name,   // snapshot: o anki isim
+                    Price = product.Price,        // snapshot: o anki fiyat
                     Quantity = request.Quantity
                 });
             }
 
             await _db.SaveChangesAsync();
 
-            _logger.LogInformation("Sepete eklendi: {Product} x{Q} (kullanıcı: {User})",
+            _logger.LogInformation("Sepete eklendi: {ProductName} x{Quantity} kullanıcı {UserId}",
                 product.Name, request.Quantity, request.UserId);
 
             return Ok(basket);
         }
 
-
+        // ---- Sepeti tamamen temizle (checkout sonrası) ----
         [HttpDelete("{userId}/clear")]
         public async Task<IActionResult> ClearBasket(string userId)
         {
@@ -128,13 +134,14 @@ namespace BasketService.Api.Controllers
 
             if (basket == null) return NotFound("Sepet bulunamadı");
 
-            _db.BasketItems.RemoveRange(basket.Items);   // tüm satırları sil
+            _db.BasketItems.RemoveRange(basket.Items);
             await _db.SaveChangesAsync();
 
             _logger.LogInformation("Sepet temizlendi: {UserId}", userId);
             return Ok();
         }
 
+        // ---- Sepetten tek ürün çıkar ----
         [HttpDelete("{userId}/items/{productId}")]
         public async Task<IActionResult> RemoveItem(string userId, int productId)
         {
@@ -150,12 +157,12 @@ namespace BasketService.Api.Controllers
             basket.Items.Remove(item);
             await _db.SaveChangesAsync();
 
-            _logger.LogInformation("Sepetten çıkarıldı: {ProductId} (kullanıcı: {User})", productId, userId);
+            _logger.LogInformation("Sepetten çıkarıldı: {ProductId} kullanıcı {UserId}", productId, userId);
             return Ok(basket);
         }
     }
-            
-    
+
+    // ProductService'ten dönen ürünü karşılamak için minimal DTO
     public class ProductDto
     {
         public int Id { get; set; }

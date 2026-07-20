@@ -16,6 +16,7 @@ var esUrl = builder.Configuration["ServiceUrls:Elasticsearch"];
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore", Serilog.Events.LogEventLevel.Warning)
     .Enrich.FromLogContext()
     .WriteTo.Async(a => a.Console())
     .WriteTo.Elasticsearch(new ElasticsearchSinkOptions(new Uri(esUrl!))
