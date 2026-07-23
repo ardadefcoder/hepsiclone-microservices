@@ -65,6 +65,14 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+// Container ortamında DB'yi oluştur + migration'ları uygula.
+// RunMigrations yalnızca docker-compose'da set edilir; lokal geliştirme etkilenmez.
+if (builder.Configuration.GetValue<bool>("RunMigrations"))
+{
+    using var scope = app.Services.CreateScope();
+    scope.ServiceProvider.GetRequiredService<UserDbContext>().Database.Migrate();
+}
+
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseCors("Frontend");
 

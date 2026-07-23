@@ -1,6 +1,7 @@
 ﻿using BasketService.Api.Data;
 using BasketService.Api.Dtos;
 using BasketService.Api.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,6 +9,7 @@ namespace BasketService.Api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize]
     public class BasketController : ControllerBase
     {
         private readonly BasketDbContext _db;

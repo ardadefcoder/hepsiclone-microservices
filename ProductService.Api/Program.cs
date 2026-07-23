@@ -1,9 +1,12 @@
 using Elastic.Clients.Elasticsearch;
 using Microsoft.EntityFrameworkCore;
-using ProductService.Api.Data;  
+using ProductService.Api.Data;
 using ProductService.Api.Middleware;
 using Serilog;
 using Serilog.Sinks.Elasticsearch;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,11 +31,50 @@ builder.Host.UseSerilog();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Swagger UI'da "Authorize" butonu — korumalı endpoint'leri token ile test etmek için
+    var scheme = new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "JWT token'ı gir (Bearer öneki olmadan)",
+        Reference = new Microsoft.OpenApi.Models.OpenApiReference
+        {
+            Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+            Id = JwtBearerDefaults.AuthenticationScheme
+        }
+    };
+    options.AddSecurityDefinition(JwtBearerDefaults.AuthenticationScheme, scheme);
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        { scheme, Array.Empty<string>() }
+    });
+});
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 
 builder.Services.AddSingleton(new ElasticsearchClient(new Uri(esUrl)));
+
+// ---- JWT Authentication (UserService'in ürettiği token'ları doğrular) ----
+var jwtKey = builder.Configuration["Jwt:Key"]!;
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+        };
+    });
 
 builder.Services.AddCors(options =>
 {
@@ -41,6 +83,14 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Container ortamında DB'yi oluştur + migration'ları uygula.
+// RunMigrations yalnızca docker-compose'da set edilir; lokal geliştirme etkilenmez.
+if (builder.Configuration.GetValue<bool>("RunMigrations"))
+{
+    using var scope = app.Services.CreateScope();
+    scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.Migrate();
+}
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 
@@ -54,7 +104,8 @@ if (app.Environment.IsDevelopment()) {
 
 
 app.UseHttpsRedirection();
-app.UseAuthorization();
+app.UseAuthentication();   // önce: sen kimsin?
+app.UseAuthorization();    // sonra: yetkin var mı?
 app.MapControllers();
 
 

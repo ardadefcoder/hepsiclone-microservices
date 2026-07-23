@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProductService.Api.Data;  
 using ProductService.Api.Dtos;
 using ProductService.Api.Models;
+using Microsoft.AspNetCore.Authorization;
 
 namespace ProductService.Api.Controllers
 {
@@ -31,7 +32,7 @@ namespace ProductService.Api.Controllers
             return Ok(products);
         }
 
-        [HttpGet("{id}")]
+        [HttpGet("{id:int}")]
         public async Task<ActionResult> GetById(int id)
         {
             var product = await _db.Products.FindAsync(id);
@@ -44,6 +45,7 @@ namespace ProductService.Api.Controllers
         }
 
         [HttpPost]
+        [Authorize]
         public async Task<IActionResult> Create(Product product)
         {
             _db.Products.Add(product);
@@ -83,26 +85,31 @@ namespace ProductService.Api.Controllers
         [HttpGet("search-es")]
         public async Task<ActionResult> SearchInElasticsearch([FromQuery] string q)
         {
-
             if (string.IsNullOrWhiteSpace(q))
             {
                 return BadRequest("Arama sorgusu boş olamaz.");
             }
 
             var response = await _es.SearchAsync<Product>(s => s
-            .Index("products")
+                .Index("products")
                 .Query(query => query
                     .MultiMatch(m => m
-                        .Fields(new[] {"name","description"})
+                        .Fields(new[] { "name", "description" })
                         .Query(q)
-                        .Fuzziness(new Fuzziness("AUTO")
-                        )
+                        .Fuzziness(new Fuzziness("AUTO"))
                     )
                 )
             );
 
-            _logger.LogInformation("Elasticsearch'te arama yapıldı: {Query}  - {Count}", q, response.Documents.Count);
-            return Ok(response.Documents);
+            if (!response.IsValidResponse)
+            {
+                _logger.LogWarning("ES araması başarısız: {Query} - {Debug}", q, response.DebugInformation);
+                return Ok(Array.Empty<Product>());
+            }
+
+            var docs = response.Documents ?? Enumerable.Empty<Product>();
+            _logger.LogInformation("Elasticsearch'te arama yapıldı: {Query} - {Count}", q, docs.Count());
+            return Ok(docs);
         }
 
         [HttpPost("reduce-stock")]
@@ -136,6 +143,68 @@ namespace ProductService.Api.Controllers
             await _db.SaveChangesAsync();
             return Ok();
         }
+
+        [HttpPost("restore-stock")]
+        public async Task<IActionResult> RestoreStock(StockReductionRequest request)
+        {
+
+            if (request.Items.Count == 0) return BadRequest("Stok iadesi için en az bir ürün gerekli.");
+
+            foreach(var item in request.Items)
+            {
+
+                if(item.Quantity <= 0)
+                {
+                    return BadRequest($"Geçersiz iade miktarı: {item.Quantity}");
+                }
+
+                var product = await _db.Products.FindAsync(item.ProductId);
+
+                if(product == null)
+                {
+                    return NotFound($"Ürün bulunamadı: {item.ProductId}");
+                }
+
+
+            }
+
+            foreach(var item in request.Items)
+            {
+
+                var product = await _db.Products.FindAsync(item.ProductId);
+
+                product!.Stock += item.Quantity;
+
+
+                var esResponse = await _es.IndexAsync(
+                    product,
+                    "products",
+                    i => i.Id(product.Id)
+                 );
+
+                if (!esResponse.IsValidResponse)
+                {
+                    _logger.LogWarning(
+                        "İade sonrası Elasticsearch stok güncellenemedi: {ProductId}",
+                        product.Id
+                    );
+                }
+
+                _logger.LogInformation(
+                    "İade stoğu geri eklendi: {ProductId}, {Quantity} adet, yeni stok: {Stock}",
+                    product.Id,
+                    item.Quantity,
+                    product.Stock
+                );
+
+            }
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new {message = "Stoklar geri eklendi."});
+
+        }
+
 
         [HttpGet("categories")]
         public async Task<IActionResult> GetAllCategories()

@@ -1,5 +1,10 @@
-version: "3.8"
+# HepsiClone — tüm stack tek komutla:  docker compose up --build
+#
+# Servisler kendi Postgres veritabanlarını ilk açılışta otomatik oluşturur
+# (RunMigrations=true → EF migration'ları uygulanır).
+
 services:
+  # ---------------- Altyapı ----------------
   postgres:
     image: postgres:16
     environment:
@@ -10,6 +15,11 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hepsiclone"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
@@ -19,6 +29,11 @@ services:
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
       - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.13.4
@@ -27,7 +42,78 @@ services:
     ports:
       - "5601:5601"
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
+
+  # ---------------- Mikroservisler ----------------
+  userservice:
+    build: ./UserService.Api
+    ports:
+      - "5001:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - RunMigrations=true
+      - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=user_db;Username=hepsiclone;Password=hepsiclone123
+      - ServiceUrls__Elasticsearch=http://elasticsearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+  productservice:
+    build: ./ProductService.Api
+    ports:
+      - "5002:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - RunMigrations=true
+      - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=product_db;Username=hepsiclone;Password=hepsiclone123
+      - ServiceUrls__ElasticSearch=http://elasticsearch:9200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+  basketservice:
+    build: ./BasketService.Api
+    ports:
+      - "5003:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - RunMigrations=true
+      - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=basket_db;Username=hepsiclone;Password=hepsiclone123
+      - ServiceUrls__Elasticsearch=http://elasticsearch:9200
+      - ServiceUrls__ProductService=http://productservice:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      productservice:
+        condition: service_started
+
+  paymentservice:
+    build: ./PaymentService.Api
+    ports:
+      - "5004:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - RunMigrations=true
+      - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=payment_db;Username=hepsiclone;Password=hepsiclone123
+      - ServiceUrls__Elasticsearch=http://elasticsearch:9200
+      - ServiceUrls__BasketService=http://basketservice:8080
+      - ServiceUrls__ProductService=http://productservice:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      basketservice:
+        condition: service_started
+      productservice:
+        condition: service_started
 
 volumes:
   pgdata:
